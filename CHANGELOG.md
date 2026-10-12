@@ -7,6 +7,8 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.1.0]
+
 ### Added
 
 - Agent answers render as markdown: bold, lists, code and headers come out
@@ -16,17 +18,11 @@ the only place a version number lives.
 - The bar icon is a brain (Font Awesome Free, CC BY 4.0), kept as vector path
   data like before, and it shows the state: the bar foreground while idle, the
   urgent colour while an agent is working.
-
-### Added
-
 - Answers carry a `copy` button on hover that puts the whole block on the
   clipboard, and every message in the transcript is selectable straight on the
   text, so part of an answer can be taken without the rest.
 - The input box scrolls: a pasted trace no longer grows the box into the
   transcript, and the view follows the caret as it moves past the edge.
-
-### Added
-
 - A `MODEL` row in the panel: pick which model the selected agent runs with
   from what opencode offers, or `default` for opencode's own choice. The choice
   is per agent and survives starting a fresh conversation, the way a pinned
