@@ -152,6 +152,20 @@ Panel {
   }
   readonly property string workdir: selected ? selected.workdir : ""
   readonly property bool workdirPinned: !!(selected && selected.workdirPinned)
+  // The model the next run of the selected agent uses: the one picked for it,
+  // or empty for opencode's own choice. The worker reads the same setting from
+  // the agent's files, so sending needs no model argument of its own.
+  readonly property string selectedModel: selected && selected.model ? String(selected.model) : ""
+
+  // The picker writes `value` itself when something is chosen, which would
+  // silently replace a binding on it, so the value is pushed in when the
+  // selection changes instead of bound: switching agents, setting a model and
+  // resetting it all flow through selectedModel, and the trigger follows every
+  // one of them.
+  onSelectedModelChanged: {
+    if (modelPicker && modelPicker.value !== root.selectedModel)
+      modelPicker.value = root.selectedModel
+  }
   // The directory a run would use right now: the one the user pinned, else
   // whatever the panel setting forces, else the window they are on.
   readonly property string effectiveWorkdir: configuredWorkDir !== ""
@@ -165,6 +179,7 @@ Panel {
   onOpenedChanged: {
     if (opened) {
       refreshAgents()
+      refreshModels()
       editor.forceActiveFocus()
     }
   }
@@ -334,6 +349,10 @@ Panel {
     var args = ["run", selectedId]
     if (autoApprove) args.push("--auto")
     if (configuredWorkDir !== "") args.push("--dir", configuredWorkDir)
+    // The worker falls back to the agent's stored model on its own; passing
+    // it along as well means the run uses exactly what the row shows, even if
+    // the `model` write from a pick a moment ago has not landed yet.
+    if (root.selectedModel !== "") args.push("--model", root.selectedModel)
     startRun(args, text)
   }
 
@@ -487,6 +506,10 @@ Panel {
     if (runProcess.running) return
     runProcess.command = [cli].concat(args)
     runProcess.prompt = prompt
+    // The previous run closed stdin after its prompt went out, and write() is a
+    // no-op on a process whose stdin is still off, so it has to be back before
+    // the next launch.
+    runProcess.stdinEnabled = true
     runProcess.running = true
   }
 
@@ -518,6 +541,16 @@ Panel {
     return String(block.text)
   }
 
+  // The whole answer onto the clipboard at once, for pasting into a terminal
+  // or a bug report. Selecting part of one works too, straight on the text;
+  // this is the one click that takes all of it.
+  function copyBlock(block) {
+    var text = root.blockText(block)
+    if (text === "") return
+    Quickshell.clipboardText = text
+    root.flash("copied to clipboard")
+  }
+
   function parseAgentList(raw) {
     try {
       var parsed = JSON.parse(String(raw || ""))
@@ -525,6 +558,53 @@ Panel {
     } catch (e) {
       return []
     }
+  }
+
+  // -------------------------------------------------------------- model list
+  //
+  // The models opencode offers, as dropdown options. They are read once per
+  // panel open rather than per send: the list changes when providers do, not
+  // between turns, and `opencode models` answers in seconds, not milliseconds.
+
+  property var modelOptions: []
+
+  function refreshModels() {
+    if (modelsProcess.running) return
+    modelsProcess.running = true
+  }
+
+  function parseModelList(raw) {
+    var options = []
+    try {
+      var parsed = JSON.parse(String(raw || ""))
+      if (!Array.isArray(parsed)) return options
+      for (var i = 0; i < parsed.length; i++) {
+        var entry = parsed[i] || {}
+        if (entry.id) options.push({value: String(entry.id), label: String(entry.id)})
+      }
+    } catch (e) {
+      // No list is a list of none, not a panel that cannot open.
+    }
+    return options
+  }
+
+  function applyModels(options) {
+    modelOptions = options
+  }
+
+  // The model the selected agent runs with. Empty is opencode's own choice,
+  // so setting and clearing are the same command with different arguments,
+  // and the script keeps the choice next to the workspace pin.
+  function setModel(value) {
+    if (selectedId === "") return
+    var model = String(value || "")
+    report(["model", selectedId, model], function() {
+      root.flash(model === "" ? "back to opencode's default model" : "model set to " + model)
+    })
+  }
+
+  function resetModel() {
+    root.setModel("")
   }
 
   Process {
@@ -536,6 +616,17 @@ Panel {
     stdout: stdoutCollector
     stderr: stderrCollector
     onExited: function(code) { root.collect(agentsProcess, code, function(out) { root.applyAgents(root.parseAgentList(out)) }) }
+  }
+
+  Process {
+    id: modelsProcess
+    command: [root.cli, "models"]
+    running: false
+    property var stdoutCollector: StdioCollector { waitForEnd: true }
+    property var stderrCollector: StdioCollector { waitForEnd: true }
+    stdout: stdoutCollector
+    stderr: stderrCollector
+    onExited: function(code) { root.collect(modelsProcess, code, function(out) { root.applyModels(root.parseModelList(out)) }) }
   }
 
   Process {
@@ -587,6 +678,11 @@ Panel {
     onStarted: {
       write(prompt)
       prompt = ""
+      // `run` reads its prompt with `cat`, which only returns at EOF, and
+      // writing alone leaves the channel open: the command would wait forever
+      // for a close that never comes and no run would start. Dropping stdin
+      // here is what delivers the prompt; it is re-enabled by startRun().
+      stdinEnabled = false
     }
     property var stdoutCollector: StdioCollector { waitForEnd: true }
     property var stderrCollector: StdioCollector { waitForEnd: true }
@@ -892,8 +988,10 @@ Panel {
       // editor takes focus, then keeps its hands off — which is where the
       // prompt normally sits. The workspace field is a second place keys are
       // meant to land: Enter there commits a path, and it must not reach
-      // send() as well.
-      blocked: editor.activeFocus || workspaceField.activeFocus
+      // send() as well. The model picker's popup is its own window, so its
+      // keys never reach this catcher at all; the flag is only what keeps a
+      // Return pressed while choosing from also sending the prompt.
+      blocked: editor.activeFocus || workspaceField.activeFocus || modelPicker.popupOpen
 
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
@@ -1066,8 +1164,12 @@ Panel {
                   cursorShape: Qt.PointingHandCursor
                   onClicked: {
                     root.cursorIndex = agentRow.modelData.slot
-                    root.selectAgent(agentRow.agentId)
+                    // Focus before selecting: selectAgent() marks the agent read,
+                    // which rebuilds the rail and takes this delegate with it, so
+                    // an id looked up after it runs against a context that is
+                    // already gone and the editor never gets the keyboard.
                     editor.forceActiveFocus()
+                    root.selectAgent(agentRow.agentId)
                   }
                 }
               }
@@ -1395,6 +1497,60 @@ Panel {
             }
           }
 
+          // ---------------------------------------------------------------- model
+          //
+          // Which model the selected agent runs with. The picker lists what
+          // opencode offers, in the order it offers it; an
+          // empty choice is opencode's own default for the agent, and "default"
+          // puts it back there. Like the workspace pin, the choice is per agent
+          // and survives a clear, because neither of them is the conversation.
+          Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Style.space(40)
+            color: root.normalFill
+            radius: Style.cornerRadius
+
+            RowLayout {
+              anchors.fill: parent
+              anchors.leftMargin: Style.spacing.sm
+              anchors.rightMargin: Style.spacing.xs
+              spacing: Style.spacing.xs
+
+              Text {
+                text: "MODEL"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.6
+              }
+
+              SearchableDropdown {
+                id: modelPicker
+                Layout.fillWidth: true
+                showLabel: false
+                enabled: root.selectedId !== ""
+                opacity: enabled ? 1 : root.disabledDim
+                options: root.modelOptions
+                triggerLabel: root.modelOptions.length === 0 ? "loading models…" : "opencode default"
+                placeholderText: "Search models…"
+                emptyText: "No model matches that"
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.accent
+                onChanged: function(picked) { root.setModel(picked) }
+              }
+
+              Button {
+                text: "default"
+                focusable: true
+                enabled: root.selectedId !== "" && root.selectedModel !== ""
+                opacity: enabled ? 1 : root.disabledDim
+                onClicked: root.resetModel()
+              }
+            }
+          }
+
           Item {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -1430,8 +1586,8 @@ Panel {
                   // what you said, in the directory you said it in
                   Rectangle {
                     visible: block.modelData.kind === "user"
-                    width: Math.min(parent.width, Math.max(prompt.implicitWidth, stamp.implicitWidth) + Style.space(28))
-                    height: prompt.implicitHeight
+                    width: Math.min(parent.width, Math.max(promptMeasure.implicitWidth, stamp.implicitWidth) + Style.space(28))
+                    height: prompt.contentHeight
                       + (stamp.visible ? stamp.implicitHeight + Style.spacing.xs : 0)
                       + Style.spacing.md
                     anchors.right: parent.right
@@ -1454,18 +1610,44 @@ Panel {
                       elide: Text.ElideLeft
                     }
 
+                    // Your words back to you, selectable for reuse elsewhere: a
+                    // label cannot be selected, so this is a read-only editing
+                    // surface. Drag to select; Ctrl+A/C work once it has the
+                    // focus, like any editor.
+                    //
+                    // The bubble hugs a hidden label, not the surface: a
+                    // wrapping surface measures itself against the width it is
+                    // given, so sizing the bubble from it is a loop.
                     Text {
+                      id: promptMeasure
+                      visible: false
+                      text: root.blockText(block.modelData)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    TextArea {
                       id: prompt
                       anchors.left: parent.left
                       anchors.right: parent.right
                       anchors.bottom: parent.bottom
                       anchors.margins: Style.spacing.sm
+                      readOnly: true
+                      selectByMouse: true
+                      persistentSelection: true
+                      background: null
+                      leftPadding: 0
+                      rightPadding: 0
+                      topPadding: 0
+                      bottomPadding: 0
                       text: root.blockText(block.modelData)
-                      textFormat: Text.PlainText
+                      textFormat: TextEdit.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
-                      wrapMode: Text.Wrap
+                      wrapMode: TextEdit.Wrap
+                      selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                      selectedTextColor: root.foreground
                     }
                   }
 
@@ -1473,23 +1655,84 @@ Panel {
                   // side of the conversation against the user's bright one.
                   Rectangle {
                     visible: block.modelData.kind === "text"
-                    width: Math.min(parent.width, answer.implicitWidth + Style.space(28))
-                    height: answer.implicitHeight + Style.spacing.md
+                    width: Math.min(parent.width, answerMeasure.implicitWidth + Style.space(28))
+                    height: answer.contentHeight + Style.spacing.md
                     color: root.hoverFill
                     radius: Style.cornerRadius
 
+                    // Hover only: a handler takes no clicks, so dragging to
+                    // select the answer still reaches the text underneath.
+                    HoverHandler {
+                      id: answerHover
+                    }
+
+                    // The bubble hugs a hidden label, not the surface: a
+                    // wrapping surface measures itself against the width it is
+                    // given, so sizing the bubble from it is a loop.
                     Text {
+                      id: answerMeasure
+                      visible: false
+                      text: root.blockText(block.modelData)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                    }
+
+                    // Answers render as markdown, because that is what agents
+                    // write: bold, lists, code and headers come out formatted
+                    // instead of showing their markers. Prompts stay plain
+                    // text on purpose — a pasted error must read exactly as
+                    // typed, not reinterpreted. Copying still takes the raw
+                    // markdown, so the formatting survives the paste.
+                    TextArea {
                       id: answer
                       anchors.left: parent.left
                       anchors.right: parent.right
                       anchors.top: parent.top
                       anchors.margins: Style.spacing.sm
+                      readOnly: true
+                      selectByMouse: true
+                      persistentSelection: true
+                      background: null
+                      leftPadding: 0
+                      rightPadding: 0
+                      topPadding: 0
+                      bottomPadding: 0
                       text: root.blockText(block.modelData)
-                      textFormat: Text.PlainText
+                      textFormat: TextEdit.MarkdownText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
-                      wrapMode: Text.Wrap
+                      wrapMode: TextEdit.Wrap
+                      selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                      selectedTextColor: root.foreground
+                    }
+
+                    // A tiny copy glyph, not a button: the block is the message,
+                    // and a full control chrome on every answer would shout
+                    // over all of them. It only shows on hover, and the flash
+                    // says when the clipboard has it.
+                    Text {
+                      anchors.right: parent.right
+                      anchors.bottom: parent.bottom
+                      anchors.rightMargin: Style.spacing.sm
+                      anchors.bottomMargin: Style.spacing.sm
+                      visible: answerHover.hovered
+                      text: ""
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      color: copyHover.hovered ? root.foreground : root.dim
+
+                      HoverHandler {
+                        id: copyHover
+                      }
+
+                      MouseArea {
+                        anchors.fill: parent
+                        anchors.margins: -Style.spacing.xs
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.copyBlock(block.modelData)
+                      }
                     }
                   }
 
@@ -1525,16 +1768,27 @@ Panel {
                     elide: Text.ElideRight
                   }
 
-                  // what went wrong
-                  Text {
+                  // what went wrong, selectable like everything else: an error
+                  // is the thing most likely to be pasted somewhere.
+                  TextArea {
                     visible: block.modelData.kind === "error"
                     width: parent.width
+                    readOnly: true
+                    selectByMouse: true
+                    persistentSelection: true
+                    background: null
+                    leftPadding: 0
+                    rightPadding: 0
+                    topPadding: 0
+                    bottomPadding: 0
                     text: "⚠  " + root.blockText(block.modelData)
-                    textFormat: Text.PlainText
+                    textFormat: TextEdit.PlainText
                     color: root.urgentColor
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
-                    wrapMode: Text.Wrap
+                    wrapMode: TextEdit.Wrap
+                    selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                    selectedTextColor: root.foreground
                   }
                 }
               }
@@ -1566,34 +1820,59 @@ Panel {
               editor.activeFocus ? "focus" : "normal", root.foreground, root.accent)
             radius: Style.cornerRadius
 
-            TextArea {
-              id: editor
+            // A pasted stack trace is taller than this box, and a box that
+            // grows with it would eat the transcript. The text scrolls
+            // instead, and the view follows the caret as it moves.
+            Flickable {
+              id: editorFlick
               anchors.fill: parent
               anchors.margins: Style.spacing.xs
-              wrapMode: TextArea.Wrap
-              selectByMouse: true
-              background: null
-              color: root.foreground
-              selectionColor: Style.selectionFillFor(root.foreground, root.accent)
-              selectedTextColor: root.foreground
-              placeholderText: root.running
-                ? root.selectedId + " is working…"
-                : "Ask for a change, or paste the error you just hit. Enter sends."
-              placeholderTextColor: Qt.darker(root.foreground, 1.7)
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+              contentWidth: width
+              contentHeight: editor.contentHeight
+              clip: true
+              boundsBehavior: Flickable.StopAtBounds
+              ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
-              Keys.onPressed: function(event) {
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  if (event.modifiers & Qt.ShiftModifier) return
-                  root.send()
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Tab) {
-                  root.switchPanel(event.modifiers & Qt.ShiftModifier ? -1 : 1)
-                  event.accepted = true
-                } else if (event.key === Qt.Key_Escape) {
-                  root.close()
-                  event.accepted = true
+              TextArea {
+                id: editor
+                width: editorFlick.width
+                wrapMode: TextArea.Wrap
+                selectByMouse: true
+                background: null
+                color: root.foreground
+                selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                selectedTextColor: root.foreground
+                placeholderText: root.running
+                  ? root.selectedId + " is working…"
+                  : "Ask for a change, or paste the error you just hit. Enter sends."
+                placeholderTextColor: Qt.darker(root.foreground, 1.7)
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.body
+
+                Keys.onPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    if (event.modifiers & Qt.ShiftModifier) return
+                    root.send()
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Tab) {
+                    root.switchPanel(event.modifiers & Qt.ShiftModifier ? -1 : 1)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Escape) {
+                    root.close()
+                    event.accepted = true
+                  }
+                }
+
+                // Keep the caret on screen: typing or arrowing past the edge
+                // pulls the view along, so the line being written is the line
+                // being seen.
+                onCursorRectangleChanged: {
+                  var top = editorFlick.contentY
+                  var bottom = top + editorFlick.height
+                  var caretTop = cursorRectangle.y
+                  var caretBottom = caretTop + cursorRectangle.height
+                  if (caretTop < top) editorFlick.contentY = caretTop
+                  else if (caretBottom > bottom) editorFlick.contentY = caretBottom - editorFlick.height
                 }
               }
             }

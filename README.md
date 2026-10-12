@@ -78,6 +78,9 @@ removing the plugin. Delete that directory to forget them.
 | Start a fresh conversation | `New`, in the header. The workspace stays where you put it |
 | Stop a running agent | `Stop`, in the header, while the agent is working |
 | Change where the next run happens | The `WORKSPACE` row: click the path, or `change…`, to type one; `window` to follow the focused window; `reset` to forget the pin |
+| Change which model an agent runs | The `MODEL` row: pick from what opencode offers, or `default` for opencode's own choice. The choice is per agent and survives `New` |
+| Copy an answer | Hover an answer and press `copy` for all of it, or drag across any message to select part of it |
+| Write a long prompt | The input box scrolls and follows the caret, so a pasted trace does not eat the transcript |
 | Close the panel | Escape, or click outside it |
 
 One conversation per agent, and they are independent: a `build` run keeps going
@@ -159,21 +162,20 @@ Hyprland is reloaded for you, so the key works straight away.
 
 ## The icon
 
-The bar icon is [Flaticon's "artificial intelligence" symbol][flaticon], kept as
-vector path data in `assets/icon.js` and filled with the colour your bar is
-using for icons at that moment. That is why it does not look pasted on: it
-follows light and dark themes, accent colours and bar sizes, exactly like the
-Nerd Font icons around it.
+The bar icon is a brain ([Font Awesome Free][fa], CC BY 4.0), kept as vector
+path data in `assets/icon.js` and filled with the colour your bar is using for
+icons at that moment. That is why it does not look pasted on: it follows light
+and dark themes, accent colours and bar sizes, exactly like the Nerd Font icons
+around it. The state rides on it: idle it wears the bar foreground, while an
+agent is working it wears the urgent colour and the tooltip says so.
 
-`assets/icon.svg` is the vector source, and it was traced from the PNG that
-Flaticon serves, because that site blocks automated downloads. `tools/png2svg.py`
-does the tracing and `tools/svg2qml.py` turns the result into `assets/icon.js`; a
-raster image is never what the bar draws, so a bar icon that does not match the
-theme is the bug this whole arrangement exists to prevent. A Nerd Font agent
-glyph is still in the widget as a fallback, so the slot is never empty if the
-artwork is ever missing.
+`assets/icon.svg` is the vector source. `tools/svg2qml.py` turns it into
+`assets/icon.js`; a raster image is never what the bar draws, so a bar icon
+that does not match the theme is the bug this whole arrangement exists to
+prevent. A Nerd Font agent glyph is still in the widget as a fallback, so the
+slot is never empty if the artwork is ever missing.
 
-[flaticon]: https://www.flaticon.com/free-icon/artificial-intelligence_7007219?term=ai+symbol&page=1&position=32&origin=tag&related_id=7007219
+[fa]: https://fontawesome.com/icons/brain
 
 ## How it works
 
@@ -240,8 +242,13 @@ agenttalk agents                        # agents as JSON
 agenttalk run build < "add a test"      # start a turn, prompt on stdin
 agenttalk run build --dir ~/Code/project < "add a test"
 agenttalk run build --new < "add a test"  # new session instead of this one
+agenttalk run build --model opencode/muse-spark < "hi"  # one run on another model
+agenttalk models                        # models opencode offers, as JSON
+agenttalk model build                   # which model this agent uses (empty: default)
+agenttalk model build opencode/muse-spark  # pick one for this agent
+agenttalk model build --clear           # back to opencode's default
 agenttalk stop build                    # stop it
-agenttalk clear build                   # forget the conversation, keep the workspace
+agenttalk clear build                   # forget the conversation, keep workspace and model
 agenttalk cwd                           # working directory of the focused window
 agenttalk cd build ~/Code/project       # where that agent works from now on
 agenttalk cd build --window             # follow the focused window again
