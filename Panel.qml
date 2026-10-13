@@ -1241,6 +1241,63 @@ Panel {
             }
           }
 
+          // ---------------------------------------------------------------- model
+          //
+          // Which model the selected agent runs with. The picker lists what
+          // opencode offers, in the order it offers it; an
+          // empty choice is opencode's own default for the agent, and "default"
+          // puts it back there. Like the workspace pin, the choice is per agent
+          // and survives a clear, because neither of them is the conversation.
+          // Model sits on the header side of the workspace because the workspace
+          // suggestions drop below their row: over the transcript, which is what
+          // they are allowed to cover, never over the picker.
+          Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Style.space(40)
+            color: root.normalFill
+            radius: Style.cornerRadius
+
+            RowLayout {
+              anchors.fill: parent
+              anchors.leftMargin: Style.spacing.sm
+              anchors.rightMargin: Style.spacing.xs
+              spacing: Style.spacing.xs
+
+              Text {
+                text: "MODEL"
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 0.6
+              }
+
+              SearchableDropdown {
+                id: modelPicker
+                Layout.fillWidth: true
+                showLabel: false
+                enabled: root.selectedId !== ""
+                opacity: enabled ? 1 : root.disabledDim
+                options: root.modelOptions
+                triggerLabel: root.modelOptions.length === 0 ? "loading models…" : "opencode default"
+                placeholderText: "Search models…"
+                emptyText: "No model matches that"
+                fontFamily: root.fontFamily
+                foreground: root.foreground
+                accent: root.accent
+                onChanged: function(picked) { root.setModel(picked) }
+              }
+
+              Button {
+                text: "default"
+                focusable: true
+                enabled: root.selectedId !== "" && root.selectedModel !== ""
+                opacity: enabled ? 1 : root.disabledDim
+                onClicked: root.resetModel()
+              }
+            }
+          }
+
           // ------------------------------------------------------------ workspace
           //
           // Where the next run happens, and the only way to change it. It sits
@@ -1298,52 +1355,81 @@ Panel {
                 }
               }
 
-              TextField {
-                id: workspaceField
+              // A TextArea, not a TextField. A native TextInput keeps `canPaste`
+              // honest by reading the whole foreign clipboard on every change,
+              // and a clipboard owner that streams and stalls instead of
+              // delivering can hang the shared shell (QTBUG-149610, OmaChat
+              // 10861). A TextArea only looks at the offered formats, and this
+              // panel is built even while it is hidden, so the difference is
+              // the whole point. The field is still single-line: Return commits
+              // instead of inserting a newline, the text never wraps, and the
+              // Flickable keeps the caret in view the way a TextField scrolled
+              // itself.
+              Flickable {
+                id: workspaceFieldFlick
                 Layout.fillWidth: true
                 Layout.leftMargin: Style.spacing.xs
+                Layout.preferredHeight: workspaceField.implicitHeight
                 visible: root.workspaceEditing
-                text: root.workspaceDraft
-                selectByMouse: true
-                background: null
-                color: root.foreground
-                selectionColor: Style.selectionFillFor(root.foreground, root.accent)
-                selectedTextColor: root.foreground
-                placeholderText: "~/Code/AgentTalk"
-                placeholderTextColor: Qt.darker(root.foreground, 1.7)
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+                clip: true
+                flickableDirection: Flickable.HorizontalFlick
+                boundsBehavior: Flickable.StopAtBounds
 
-                onAccepted: root.acceptWorkspace()
-                // Every keystroke re-asks. The list, not Tab, is what makes a
-                // path recognisable while it is being typed.
-                onTextEdited: {
-                  root.setWorkspaceDraft(text)
-                  suggestTimer.restart()
-                }
-                Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Escape) {
-                    // Escape closes the list before it gives up the field, so a
-                    // half-typed path can be walked away from one step at a time.
-                    if (root.suggestPaths.length > 0) {
-                      root.suggestPaths = []
-                      root.suggestIndex = -1
-                    } else {
-                      root.workspaceEditing = false
+                TextArea.flickable: TextArea {
+                  id: workspaceField
+                  text: root.workspaceDraft
+                  wrapMode: TextEdit.NoWrap
+                  selectByMouse: true
+                  background: null
+                  color: root.foreground
+                  selectionColor: Style.selectionFillFor(root.foreground, root.accent)
+                  selectedTextColor: root.foreground
+                  placeholderText: "~/Code/AgentTalk"
+                  placeholderTextColor: Qt.darker(root.foreground, 1.7)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  // A TextArea has no `textEdited` signal. Every write to the
+                  // field also changes `text`, but the ones that already hold
+                  // the draft agree with it, so only a real edit survives the
+                  // check -- and a real edit is exactly when the list is asked
+                  // again. The list, not Tab, is what makes a path
+                  // recognisable while it is being typed.
+                  onTextChanged: {
+                    if (text !== root.workspaceDraft) {
+                      root.setWorkspaceDraft(text)
+                      suggestTimer.restart()
                     }
-                    event.accepted = true
-                  } else if (event.key === Qt.Key_Tab) {
-                    // Tab completes a directory here. While the field holds
-                    // the focus the catcher never sees the key, so it cannot
-                    // fall through to switching panels.
-                    root.completeCommonPrefix()
-                    event.accepted = true
-                  } else if (event.key === Qt.Key_Down) {
-                    root.moveSuggestion(1)
-                    event.accepted = true
-                  } else if (event.key === Qt.Key_Up) {
-                    root.moveSuggestion(-1)
-                    event.accepted = true
+                  }
+
+                  Keys.onPressed: function(event) {
+                    // Enter commits, where a TextField fired `accepted`.
+                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                      root.acceptWorkspace()
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Escape) {
+                      // Escape closes the list before it gives up the field, so a
+                      // half-typed path can be walked away from one step at a time.
+                      if (root.suggestPaths.length > 0) {
+                        root.suggestPaths = []
+                        root.suggestIndex = -1
+                      } else {
+                        root.workspaceEditing = false
+                      }
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Tab) {
+                      // Tab completes a directory here. While the field holds
+                      // the focus the catcher never sees the key, so it cannot
+                      // fall through to switching panels.
+                      root.completeCommonPrefix()
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Down) {
+                      root.moveSuggestion(1)
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Up) {
+                      root.moveSuggestion(-1)
+                      event.accepted = true
+                    }
                   }
                 }
               }
@@ -1494,60 +1580,6 @@ Panel {
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
-            }
-          }
-
-          // ---------------------------------------------------------------- model
-          //
-          // Which model the selected agent runs with. The picker lists what
-          // opencode offers, in the order it offers it; an
-          // empty choice is opencode's own default for the agent, and "default"
-          // puts it back there. Like the workspace pin, the choice is per agent
-          // and survives a clear, because neither of them is the conversation.
-          Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: Style.space(40)
-            color: root.normalFill
-            radius: Style.cornerRadius
-
-            RowLayout {
-              anchors.fill: parent
-              anchors.leftMargin: Style.spacing.sm
-              anchors.rightMargin: Style.spacing.xs
-              spacing: Style.spacing.xs
-
-              Text {
-                text: "MODEL"
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                font.letterSpacing: 0.6
-              }
-
-              SearchableDropdown {
-                id: modelPicker
-                Layout.fillWidth: true
-                showLabel: false
-                enabled: root.selectedId !== ""
-                opacity: enabled ? 1 : root.disabledDim
-                options: root.modelOptions
-                triggerLabel: root.modelOptions.length === 0 ? "loading models…" : "opencode default"
-                placeholderText: "Search models…"
-                emptyText: "No model matches that"
-                fontFamily: root.fontFamily
-                foreground: root.foreground
-                accent: root.accent
-                onChanged: function(picked) { root.setModel(picked) }
-              }
-
-              Button {
-                text: "default"
-                focusable: true
-                enabled: root.selectedId !== "" && root.selectedModel !== ""
-                opacity: enabled ? 1 : root.disabledDim
-                onClicked: root.resetModel()
-              }
             }
           }
 
