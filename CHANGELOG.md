@@ -7,6 +7,19 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.1.1]
+
+### Fixed
+
+- The workspace field is no longer a native text input. A `TextField` reads the
+  whole foreign clipboard on every change to answer its own "can I paste"
+  question, and a clipboard owner that streams and stalls instead of delivering
+  can hang the shared shell — a field that stays built inside a hidden panel
+  made that reachable without any paste. The field is a plain-text `TextArea`
+  now, which only looks at what the clipboard offers (Qt bug QTBUG-149610), and
+  it still behaves like a one-line field: Return commits the path, Tab
+  completes it, and the caret stays in view while it is being typed.
+
 ## [2.1.0]
 
 ### Added
