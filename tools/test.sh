@@ -686,18 +686,25 @@ check "a run keeps the pin for the next one" \
 
 # --- paste -------------------------------------------------------------------
 #
-# `paste` is what the panel's Ctrl+V and Shift+Insert ask. It reads the foreign
-# clipboard as a child process with a deadline and a byte cap, so the shell never
-# waits on a provider that streams or stalls. `wl-paste` is stubbed so both
-# bounds can be driven deterministically; the stub goes on PATH rather than being
-# called directly because the command resolves it by name.
+# `paste` is what the panel's Ctrl+V and Shift+Insert ask, and `paste --primary`
+# is what its middle-click guard asks instead. Both read the foreign clipboard
+# (or PRIMARY selection) as a child process with a deadline and a byte cap, so
+# the shell never waits on a provider that streams or stalls. `wl-paste` is
+# stubbed so both bounds can be driven deterministically, and so the two sources
+# can be told apart; the stub goes on PATH rather than being called directly
+# because the command resolves it by name.
 PASTE_BIN="$ALT/paste-bin"
 mkdir -p "$PASTE_BIN"
 cat >"$PASTE_BIN/wl-paste" <<'EOF'
 #!/usr/bin/env bash
+primary=0
+for arg in "$@"; do
+  [[ "$arg" == "-p" || "$arg" == "--primary" ]] && primary=1
+done
 [[ -n "${STUB_SLEEP:-}" ]] && sleep "$STUB_SLEEP"
 if [[ -n "${STUB_BYTES:-}" ]]; then head -c "$STUB_BYTES" /dev/zero | tr '\0' x
 elif [[ "${STUB_EMPTY:-}" == "1" ]]; then :
+elif ((primary)); then printf '%s' "${STUB_PRIMARY:-selection text}"
 else printf '%s' "${STUB_TEXT:-clipboard text}"; fi
 exit "${STUB_EXIT:-0}"
 EOF
@@ -722,6 +729,21 @@ check "paste drops a copy cut off at the deadline" \
 check "paste says there is nothing to paste for an empty clipboard" \
   "$(STUB_EMPTY=1 PATH="$PASTE_PATH" "$AGENTTALK" paste 2>&1 >/dev/null)" \
   "agenttalk: nothing to paste"
+
+# Middle click pastes the PRIMARY selection, not the clipboard. It goes through
+# the same command and the same bounds, only the source differs.
+check "paste --primary reads the selection, not the clipboard" \
+  "$(STUB_TEXT='clip text' STUB_PRIMARY='selected text' PATH="$PASTE_PATH" "$AGENTTALK" paste --primary)" \
+  "selected text"
+check "paste without --primary ignores the selection" \
+  "$(STUB_TEXT='clip text' STUB_PRIMARY='selected text' PATH="$PASTE_PATH" "$AGENTTALK" paste)" \
+  "clip text"
+check "paste --primary is bounded like the clipboard" \
+  "$(STUB_BYTES=64 AGENTTALK_PASTE_MAX=32 PATH="$PASTE_PATH" "$AGENTTALK" paste --primary 2>&1 >/dev/null)" \
+  "agenttalk: the clipboard text is over the 32-byte limit for one paste"
+check "paste --primary drops a selection cut off at the deadline" \
+  "$(STUB_PRIMARY=slow STUB_SLEEP=5 AGENTTALK_PASTE_TIMEOUT=1 PATH="$PASTE_PATH" "$AGENTTALK" paste --primary 2>&1 >/dev/null)" \
+  "agenttalk: the clipboard did not answer within 1s"
 
 # --- clear ------------------------------------------------------------------
 
