@@ -32,6 +32,7 @@
 #   model <agent> [model|--clear]   which model an agent uses (empty: opencode's)
 #   cd <agent> <dir|--window|--reset>  choose where that agent works
 #   complete [dir-prefix] [stem]       list directories for Tab completion
+#   paste                         the clipboard, bounded, for the panel
 #   clear <agent>                 forget the conversation
 #   stop <agent>                  stop the running turn
 #   cwd                           working directory for the focused window
@@ -45,6 +46,8 @@
 #   AGENTTALK_TIMEOUT       seconds before a run is killed (default: 3600)
 #   AGENTTALK_STDIN_TIMEOUT seconds to wait for the end of the prompt on stdin
 #                           before using what arrived (default: 5)
+#   AGENTTALK_PASTE_TIMEOUT seconds to wait for the clipboard on paste (default: 2)
+#   AGENTTALK_PASTE_MAX     bytes one paste may bring back (default: 262144)
 #   HYPRLAND_CONFIG_DIR    Hyprland config directory (default: ~/.config/hypr)
 
 set -uo pipefail
@@ -644,6 +647,61 @@ cmd_complete() {
   fi | LC_ALL=C sort -f
 }
 
+# ------------------------------------------------------------------- paste
+
+# The clipboard read behind an explicit paste. A QML text surface hands Ctrl+V
+# and Shift+Insert to Qt, which reads the whole foreign clipboard synchronously
+# on the shell's own thread: a provider that streams slowly, never ends, or is
+# simply enormous can stall or exhaust the shared shell, and neither the wait
+# nor the size has a ceiling. The panel reads through here instead, as a child
+# process, so the shell only waits on this command and this command only waits
+# within a deadline and a byte cap.
+#
+# The two bounds hold together, and a copy cut off at either is dropped rather
+# than kept: text that stops in the middle would quietly lie about what was
+# copied, and a paste is exactly where that lie would go unnoticed. The panel is
+# told why nothing came back.
+cmd_paste() {
+  local deadline="${AGENTTALK_PASTE_TIMEOUT:-2}"
+  local limit="${AGENTTALK_PASTE_MAX:-262144}"
+  ((limit > 0)) || limit=262144
+
+  command -v wl-paste >/dev/null 2>&1 || { log "wl-paste is not installed"; return 1; }
+
+  local tmp
+  tmp=$(mktemp) || return 1
+
+  # One byte past the cap proves the payload is over it, and the cap is on the
+  # read so an oversized clipboard never lands on disk. `timeout` bounds the
+  # wait, and --kill-after makes the deadline real for a wl-paste that ignores
+  # the first signal.
+  local -a status
+  timeout --kill-after=1 "$deadline" wl-paste --no-newline --type text 2>/dev/null \
+    | head -c $((limit + 1)) >"$tmp"
+  status=("${PIPESTATUS[@]}")
+
+  local size why=""
+  size=$(file_size "$tmp")
+  if ((status[0] == 124 || status[0] == 137)); then
+    why="the clipboard did not answer within ${deadline}s"
+  elif ((size > limit)); then
+    why="the clipboard text is over the ${limit}-byte limit for one paste"
+  elif ((size == 0)); then
+    why="nothing to paste"
+  elif ((status[0] != 0 && status[0] != 141)); then
+    why="the clipboard could not be read"
+  fi
+
+  if [[ -n "$why" ]]; then
+    rm -f "$tmp"
+    log "$why"
+    return 1
+  fi
+
+  cat "$tmp"
+  rm -f "$tmp"
+}
+
 # ------------------------------------------------------------------- init
 
 # The one place a fresh meta.json is written. `init` and `clear` both used to
@@ -1169,6 +1227,7 @@ main() {
     cwd) shift; cmd_cwd "$@" ;;
     cd) shift; cmd_cd "$@" ;;
     complete) shift; cmd_complete "$@" ;;
+    paste) shift; cmd_paste "$@" ;;
     state-dir) printf '%s\n' "$STATE_DIR" ;;
     bind) shift; cmd_bind "$@" ;;
     unbind) shift; cmd_unbind "$@" ;;

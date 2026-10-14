@@ -684,6 +684,45 @@ check "a run without --dir uses the pinned workdir" \
 check "a run keeps the pin for the next one" \
   "$(jq -r '.workdirPinned' "$meta")" "true"
 
+# --- paste -------------------------------------------------------------------
+#
+# `paste` is what the panel's Ctrl+V and Shift+Insert ask. It reads the foreign
+# clipboard as a child process with a deadline and a byte cap, so the shell never
+# waits on a provider that streams or stalls. `wl-paste` is stubbed so both
+# bounds can be driven deterministically; the stub goes on PATH rather than being
+# called directly because the command resolves it by name.
+PASTE_BIN="$ALT/paste-bin"
+mkdir -p "$PASTE_BIN"
+cat >"$PASTE_BIN/wl-paste" <<'EOF'
+#!/usr/bin/env bash
+[[ -n "${STUB_SLEEP:-}" ]] && sleep "$STUB_SLEEP"
+if [[ -n "${STUB_BYTES:-}" ]]; then head -c "$STUB_BYTES" /dev/zero | tr '\0' x
+elif [[ "${STUB_EMPTY:-}" == "1" ]]; then :
+else printf '%s' "${STUB_TEXT:-clipboard text}"; fi
+exit "${STUB_EXIT:-0}"
+EOF
+chmod +x "$PASTE_BIN/wl-paste"
+PASTE_PATH="$PASTE_BIN:$PATH"
+
+check "paste returns the clipboard text unchanged" \
+  "$(STUB_TEXT=$'a trace\nwith\nlines' PATH="$PASTE_PATH" "$AGENTTALK" paste)" \
+  $'a trace\nwith\nlines'
+check "paste keeps whitespace, a paste is not a log line" \
+  "$(STUB_TEXT=$'padded  ' PATH="$PASTE_PATH" "$AGENTTALK" paste | wc -c)" "8"
+check "paste drops a copy over the byte cap" \
+  "$(STUB_BYTES=64 AGENTTALK_PASTE_MAX=32 PATH="$PASTE_PATH" "$AGENTTALK" paste 2>&1 >/dev/null)" \
+  "agenttalk: the clipboard text is over the 32-byte limit for one paste"
+check "paste fails when it drops an over-cap copy" \
+  "$(STUB_BYTES=64 AGENTTALK_PASTE_MAX=32 PATH="$PASTE_PATH" "$AGENTTALK" paste >/dev/null 2>&1; echo $?)" "1"
+check "paste keeps a copy exactly at the cap" \
+  "$(STUB_BYTES=32 AGENTTALK_PASTE_MAX=32 PATH="$PASTE_PATH" "$AGENTTALK" paste | wc -c)" "32"
+check "paste drops a copy cut off at the deadline" \
+  "$(STUB_TEXT=slow STUB_SLEEP=5 AGENTTALK_PASTE_TIMEOUT=1 PATH="$PASTE_PATH" "$AGENTTALK" paste 2>&1 >/dev/null)" \
+  "agenttalk: the clipboard did not answer within 1s"
+check "paste says there is nothing to paste for an empty clipboard" \
+  "$(STUB_EMPTY=1 PATH="$PASTE_PATH" "$AGENTTALK" paste 2>&1 >/dev/null)" \
+  "agenttalk: nothing to paste"
+
 # --- clear ------------------------------------------------------------------
 
 AGENTTALK_OPENCODE_BIN="$STUB" "$AGENTTALK" clear build >/dev/null 2>&1
