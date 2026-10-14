@@ -7,6 +7,27 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.2.0]
+
+### Added
+
+- `agenttalk paste`: the clipboard read the panel uses for an explicit paste,
+  bounded by an overall deadline and a total byte limit so a slow, stalled or
+  enormous clipboard cannot block or exhaust the shell. It works from a terminal
+  too.
+
+### Fixed
+
+- Pasting into the workspace field or the prompt box no longer hands `Ctrl+V` and
+  `Shift+Insert` to Qt. Qt's own paste reads the whole foreign clipboard
+  synchronously on the shell's thread, so a provider that streams slowly, never
+  ends, or is simply enormous could stall or exhaust the shared shell — and
+  neither the wait nor the size had a ceiling. The panel now intercepts both keys
+  and reads through `agenttalk paste` as a child process (deadline 2s, byte limit
+  256 KiB), dropping a copy cut off at either bound rather than pasting it
+  half-finished. Both bounds are configurable with `AGENTTALK_PASTE_TIMEOUT` and
+  `AGENTTALK_PASTE_MAX`.
+
 ## [2.1.1]
 
 ### Fixed

@@ -551,6 +551,40 @@ Panel {
     root.flash("copied to clipboard")
   }
 
+  // Explicit paste, on purpose and bounded. A text surface that pastes for
+  // itself hands Ctrl+V and Shift+Insert to Qt, which reads the whole foreign
+  // clipboard synchronously on the shell's own thread: a provider that streams
+  // slowly, never ends, or is simply enormous can stall or exhaust the shared
+  // shell, and neither the wait nor the size has a ceiling. The panel reads
+  // through `agenttalk paste` instead, as a child process with a deadline and a
+  // byte cap, and splices the answer in itself.
+  function isPasteKey(event) {
+    if (event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) return true
+    if (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)) return true
+    return false
+  }
+
+  // One paste at a time. A second request that arrives while the clipboard is
+  // still being read is dropped rather than queued: the field it was aimed at
+  // may be gone by the time the answer lands.
+  function requestPaste(area) {
+    if (pasteProcess.running) return
+    pasteProcess.target = area
+    pasteProcess.running = true
+  }
+
+  // Splice text in at the caret the way a paste would, replacing whatever is
+  // selected. The workspace field re-derives its draft from `onTextChanged`, so
+  // this leaves that to the field rather than touching the draft here.
+  function insertPasted(area, text) {
+    if (!area || text === "") return
+    var start = Math.min(area.selectionStart, area.selectionEnd)
+    var end = Math.max(area.selectionStart, area.selectionEnd)
+    area.remove(start, end)
+    area.insert(start, text)
+    area.cursorPosition = start + text.length
+  }
+
   function parseAgentList(raw) {
     try {
       var parsed = JSON.parse(String(raw || ""))
@@ -692,6 +726,36 @@ Panel {
     // progress (a session id) that the transcript already shows. A non-zero exit
     // is still worth saying out loud, and that is what collect() does.
     onExited: function(code) { root.collect(runProcess, code, function() {}) }
+  }
+
+  // The clipboard read behind an explicit paste. Its own process because a
+  // paste and a run have nothing to do with each other, and the answer it
+  // carries is text to place rather than progress to show, so it is read
+  // verbatim: `collect()` trims, and a pasted trace must keep its whitespace.
+  Process {
+    id: pasteProcess
+    command: [root.cli, "paste"]
+    running: false
+    property var target: null
+    property var stdoutCollector: StdioCollector { waitForEnd: true }
+    property var stderrCollector: StdioCollector { waitForEnd: true }
+    stdout: stdoutCollector
+    stderr: stderrCollector
+    onExited: function(code) {
+      var area = pasteProcess.target
+      pasteProcess.target = null
+      // Read the collectors one tick after the process is gone, per the house
+      // rule, so they have been flushed.
+      Qt.callLater(function() {
+        var out = String(pasteProcess.stdoutCollector.text || "")
+        var err = String(pasteProcess.stderrCollector.text || "").trim()
+        if (code !== 0) {
+          root.flash(err !== "" ? err : "nothing to paste")
+          return
+        }
+        root.insertPasted(area, out)
+      })
+    }
   }
 
   Timer {
@@ -1403,8 +1467,13 @@ Panel {
                   }
 
                   Keys.onPressed: function(event) {
-                    // Enter commits, where a TextField fired `accepted`.
-                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    // Paste is read through the script, bounded, never handed to
+                    // Qt's own synchronous clipboard read.
+                    if (root.isPasteKey(event)) {
+                      root.requestPaste(workspaceField)
+                      event.accepted = true
+                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                      // Enter commits, where a TextField fired `accepted`.
                       root.acceptWorkspace()
                       event.accepted = true
                     } else if (event.key === Qt.Key_Escape) {
@@ -1882,7 +1951,13 @@ Panel {
                 font.pixelSize: Style.font.body
 
                 Keys.onPressed: function(event) {
-                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  // Paste is read through the script, bounded, never handed to
+                  // Qt's own synchronous clipboard read. It is checked before
+                  // the Return branch so Shift+Insert is a paste, not a send.
+                  if (root.isPasteKey(event)) {
+                    root.requestPaste(editor)
+                    event.accepted = true
+                  } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
                     if (event.modifiers & Qt.ShiftModifier) return
                     root.send()
                     event.accepted = true

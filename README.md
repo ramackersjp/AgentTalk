@@ -19,6 +19,9 @@ keeps going while you close the panel, change your theme, or restart your shell.
 - `jq`, which the script uses for every piece of JSON it reads or writes. It is a
   dependency of Omarchy itself, so it is already installed; it is named here
   because a plugin that quietly needs a tool is worse than one that says so.
+- `wl-clipboard` (`wl-paste`), which reads the clipboard for an explicit paste.
+  It is part of Omarchy already; reading through it rather than through Qt is
+  what keeps a slow or enormous clipboard from stalling the shell.
 - bash and the usual POSIX tools: `find`, `mktemp`, `awk`, `sed`, `readlink`,
   `timeout`. `hyprctl` is asked where the focused window is working, and without
   it every agent falls back to your home directory.
@@ -227,6 +230,16 @@ really lost by any of this — opencode keeps the full conversation in its own
 session, and these are the logs AgentTalk makes for reading, not a record of
 what happened.
 
+A paste is bounded the same way, and it is read through `bin/agenttalk` rather
+than by Qt. A QML text surface that pastes for itself reads the whole foreign
+clipboard synchronously on the shell's own thread, so a provider that streams
+slowly, never ends, or is simply enormous can stall or exhaust the shared shell
+with no ceiling on either the wait or the size. `agenttalk paste` reads as a
+child process instead, with an overall deadline of 2 seconds and a total byte
+limit of 256 KiB. A copy cut off at either bound is dropped rather than pasted
+half-finished, and the panel says why. Both are settable with
+`AGENTTALK_PASTE_TIMEOUT` and `AGENTTALK_PASTE_MAX`.
+
 Events are normalised to a handful of shapes — `user`, `text`, `tool`, `error`,
 `session`, `done` — so the panel never has to know opencode's internals. It
 also means a future opencode release cannot break the transcript by renaming a
@@ -254,6 +267,7 @@ agenttalk cd build ~/Code/project       # where that agent works from now on
 agenttalk cd build --window             # follow the focused window again
 agenttalk cd build --reset              # forget the pinned path
 agenttalk complete Code/ Age            # directories, for the workspace field
+agenttalk paste                         # the clipboard, bounded, for the panel
 agenttalk doctor                        # what the plugin can find
 agenttalk state-dir                     # where the conversations live
 ```
@@ -295,6 +309,8 @@ What the script reads from the environment:
 | `AGENTTALK_PANEL_LOG_MAX` | bytes `panel.jsonl` may reach (default `262144`) |
 | `AGENTTALK_PANEL_LOG_KEEP` | bytes kept when the file has to make room (default `131072`) |
 | `AGENTTALK_EVENT_MAX` | bytes one event may reach, read and kept (default `65536`) |
+| `AGENTTALK_PASTE_TIMEOUT` | seconds to wait for the clipboard on paste (default `2`) |
+| `AGENTTALK_PASTE_MAX` | bytes one paste may bring back (default `262144`) |
 | `AGENTTALK_EVENTS_LOG_MAX` | bytes `events.jsonl` may reach (default `8388608`) |
 | `AGENTTALK_EVENTS_LOG_KEEP` | bytes kept when that file has to make room (default `4194304`) |
 | `HYPRLAND_CONFIG_DIR` | Hyprland config directory (default `~/.config/hypr`) |
