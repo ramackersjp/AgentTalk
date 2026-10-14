@@ -7,6 +7,19 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.2.1]
+
+### Fixed
+
+- Middle-clicking the workspace field or the prompt box no longer hands the
+  PRIMARY selection to Qt. Qt's middle-click paste reads that foreign selection
+  synchronously on the shell's thread, exactly like `Ctrl+V` reads the clipboard,
+  so a selection owner that streams slowly, never ends, or is simply enormous
+  could still stall or exhaust the shared shell even though the keyboard pastes
+  were bounded. Both editors now take the middle button for themselves and read
+  through `agenttalk paste --primary`, under the same deadline and byte limit as
+  the clipboard; `paste` grew a `--primary` flag for it.
+
 ## [2.2.0]
 
 ### Added

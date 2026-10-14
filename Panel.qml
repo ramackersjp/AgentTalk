@@ -552,12 +552,13 @@ Panel {
   }
 
   // Explicit paste, on purpose and bounded. A text surface that pastes for
-  // itself hands Ctrl+V and Shift+Insert to Qt, which reads the whole foreign
-  // clipboard synchronously on the shell's own thread: a provider that streams
-  // slowly, never ends, or is simply enormous can stall or exhaust the shared
-  // shell, and neither the wait nor the size has a ceiling. The panel reads
-  // through `agenttalk paste` instead, as a child process with a deadline and a
-  // byte cap, and splices the answer in itself.
+  // itself hands Ctrl+V, Shift+Insert and middle click to Qt, which reads the
+  // whole foreign clipboard (or PRIMARY selection) synchronously on the shell's
+  // own thread: a provider that streams slowly, never ends, or is simply
+  // enormous can stall or exhaust the shared shell, and neither the wait nor the
+  // size has a ceiling. The panel reads through `agenttalk paste` instead, as a
+  // child process with a deadline and a byte cap, and splices the answer in
+  // itself.
   function isPasteKey(event) {
     if (event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) return true
     if (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)) return true
@@ -567,9 +568,14 @@ Panel {
   // One paste at a time. A second request that arrives while the clipboard is
   // still being read is dropped rather than queued: the field it was aimed at
   // may be gone by the time the answer lands.
-  function requestPaste(area) {
+  //
+  // `primary` picks the selection a middle click pastes rather than the
+  // clipboard. Both go through the same child process and the same two bounds;
+  // only the source differs.
+  function requestPaste(area, primary) {
     if (pasteProcess.running) return
     pasteProcess.target = area
+    pasteProcess.primary = primary === true
     pasteProcess.running = true
   }
 
@@ -734,8 +740,11 @@ Panel {
   // verbatim: `collect()` trims, and a pasted trace must keep its whitespace.
   Process {
     id: pasteProcess
-    command: [root.cli, "paste"]
+    command: primary
+      ? [root.cli, "paste", "--primary"]
+      : [root.cli, "paste"]
     running: false
+    property bool primary: false
     property var target: null
     property var stdoutCollector: StdioCollector { waitForEnd: true }
     property var stderrCollector: StdioCollector { waitForEnd: true }
@@ -1500,6 +1509,21 @@ Panel {
                       event.accepted = true
                     }
                   }
+
+                  // Middle click is Qt's other paste gesture, and it reads the
+                  // PRIMARY selection as synchronously as Ctrl+V reads the
+                  // clipboard. This guard takes that one button so Qt never
+                  // sees it; every other button is left alone, so left click
+                  // still places the caret and selects.
+                  MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.MiddleButton
+                    onClicked: function(mouse) {
+                      var at = workspaceField.positionAt(mouse.x, mouse.y)
+                      if (at >= 0) workspaceField.cursorPosition = at
+                      root.requestPaste(workspaceField, true)
+                    }
+                  }
                 }
               }
 
@@ -1967,6 +1991,21 @@ Panel {
                   } else if (event.key === Qt.Key_Escape) {
                     root.close()
                     event.accepted = true
+                  }
+                }
+
+                // Middle click is Qt's other paste gesture, and it reads the
+                // PRIMARY selection as synchronously as Ctrl+V reads the
+                // clipboard. This guard takes that one button so Qt never sees
+                // it; every other button is left alone, so left click still
+                // places the caret and selects.
+                MouseArea {
+                  anchors.fill: parent
+                  acceptedButtons: Qt.MiddleButton
+                  onClicked: function(mouse) {
+                    var at = editor.positionAt(mouse.x, mouse.y)
+                    if (at >= 0) editor.cursorPosition = at
+                    root.requestPaste(editor, true)
                   }
                 }
 

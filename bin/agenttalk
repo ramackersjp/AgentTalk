@@ -32,7 +32,7 @@
 #   model <agent> [model|--clear]   which model an agent uses (empty: opencode's)
 #   cd <agent> <dir|--window|--reset>  choose where that agent works
 #   complete [dir-prefix] [stem]       list directories for Tab completion
-#   paste                         the clipboard, bounded, for the panel
+#   paste [--primary]             the clipboard (or the PRIMARY selection), bounded, for the panel
 #   clear <agent>                 forget the conversation
 #   stop <agent>                  stop the running turn
 #   cwd                           working directory for the focused window
@@ -661,22 +661,37 @@ cmd_complete() {
 # than kept: text that stops in the middle would quietly lie about what was
 # copied, and a paste is exactly where that lie would go unnoticed. The panel is
 # told why nothing came back.
+#
+# A middle click is the other paste gesture, and it pastes the PRIMARY selection
+# rather than the clipboard. `--primary` makes both bounds cover that selection
+# too, so the same gesture cannot reach around them.
 cmd_paste() {
   local deadline="${AGENTTALK_PASTE_TIMEOUT:-2}"
   local limit="${AGENTTALK_PASTE_MAX:-262144}"
   ((limit > 0)) || limit=262144
+
+  local selection="clipboard" arg
+  for arg in "$@"; do
+    case "$arg" in
+      --primary) selection="primary" ;;
+      *) log "paste does not understand '$arg'"; return 1 ;;
+    esac
+  done
 
   command -v wl-paste >/dev/null 2>&1 || { log "wl-paste is not installed"; return 1; }
 
   local tmp
   tmp=$(mktemp) || return 1
 
+  local -a wpaste=(wl-paste --no-newline --type text)
+  [[ "$selection" == "primary" ]] && wpaste+=(--primary)
+
   # One byte past the cap proves the payload is over it, and the cap is on the
   # read so an oversized clipboard never lands on disk. `timeout` bounds the
   # wait, and --kill-after makes the deadline real for a wl-paste that ignores
   # the first signal.
   local -a status
-  timeout --kill-after=1 "$deadline" wl-paste --no-newline --type text 2>/dev/null \
+  timeout --kill-after=1 "$deadline" "${wpaste[@]}" 2>/dev/null \
     | head -c $((limit + 1)) >"$tmp"
   status=("${PIPESTATUS[@]}")
 
