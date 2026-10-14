@@ -16,10 +16,29 @@ An Omarchy shell plugin: a bar widget (`BarWidget.qml`, `Panel.qml`,
 `Session.qml`, `Model.js`) and one shell script (`bin/agenttalk`) that owns every
 process and every file. `tools/` holds development helpers, not runtime code.
 
-The contract with the shell is the Omarchy plugin contract, documented at
-<https://plugins.omarchy.org/develop.html>. Publishing requirements are at
-<https://plugins.omarchy.org/publish.html>, and the marketplace has its own
-rules at <https://github.com/omacom/omarchy-plugin-marketplace>.
+The contract with the shell is the Omarchy plugin contract. Do not invent a
+second one. Read the docs below and follow them; when they and a guess
+disagree, the docs win.
+
+- End-user manual: <https://omarchy.org/manual/>
+- Omarchy source: <https://github.com/omacom/omarchy>
+- Plugin development: <https://plugins.omarchy.org/develop.html>
+- Marketplace rules: <https://github.com/omacom/omarchy-plugin-marketplace>
+- Publishing: <https://plugins.omarchy.org/publish.html>
+- Submit form: <https://github.com/omacom/omarchy-plugin-marketplace/issues/new?template=submit-plugin.yml>
+
+Omarchy is an opinionated Arch Linux install with Hyprland. Packaged files
+under `/usr/share/omarchy/` are read-only and overwritten on update; user
+config lives in `~/.config/`. The shell is one long-running Quickshell process.
+Plugins run unsandboxed inside that process, under `~/.config/omarchy/plugins/<id>/`,
+with the same `manifest.json` contract as the built-ins in
+`shell/plugins/` of the Omarchy source. Never start a second Quickshell for a
+plugin, and never edit a packaged copy. The shell reference is
+<https://github.com/omacom/omarchy/blob/quattro/shell/README.md>. A listed
+plugin is updated by a `[Verify]:` issue whose body says "Verify and publish a
+newer upstream commit" and names the exact 40-character SHA; editing that
+issue re-runs marketplace validation. Only that SHA can become the snapshot.
+Approval is a listing, not a security audit.
 
 ## Versioning
 
@@ -63,6 +82,21 @@ rules at <https://github.com/omacom/omarchy-plugin-marketplace>.
   asking for it in that conversation.** Work stays local until then. That
   includes the marketplace: submission happens through the marketplace's own
   issue-driven flow, and only when the owner says so.
+- **The owner tests on their own Omarchy before anything is pushed.** Asking for
+  a change is not asking for a push. Build the branch into the installed plugin
+  and stop. The owner tests it there. Push, open the pull request, tag, or file
+  the marketplace issue only after that test, or when the owner explicitly says
+  to push in that conversation. Do not push first and ask them to pull.
+  The installed copy is a clone of this repo:
+  ```bash
+  plugin=~/.config/omarchy/plugins/io.github.ramackersjp.agenttalk
+  git -C "$plugin" fetch /home/jp/Code/AgentTalk <branch>
+  git -C "$plugin" switch -C <branch> FETCH_HEAD
+  omarchy-shell shell rescanPlugins
+  ```
+  Plugin QML hot-reloads from that directory. `bin/agenttalk` is read on the
+  next invocation, so a script change does not need a shell restart. Do not
+  edit `/usr/share/omarchy/` to test.
 - Before proposing a pull request: `omarchy plugin validate .`, `qmllint`,
   `bash -n bin/agenttalk`, `bash tools/test.sh`, and a live check on a real
   Omarchy session if the change touches the panel or the bar widget.
