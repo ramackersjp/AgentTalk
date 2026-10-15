@@ -541,6 +541,19 @@ Panel {
     return String(block.text)
   }
 
+  // Qt's text engine loads an image the moment markdown names one, on the
+  // shell's own thread, so a path that never ends — a FIFO — freezes the whole
+  // shell for as long as it is held open, and a transcript is exactly where an
+  // unread pasted line lands. A rendered answer therefore keeps its markdown
+  // but loses its images, the alt text left in their place, so nothing in the
+  // transcript can start a load. Prompts render as plain text and are untouched.
+  function renderText(block) {
+    return root.blockText(block)
+      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+      .replace(/!\[([^\]]*)\]/g, "$1")
+  }
+
   // The whole answer onto the clipboard at once, for pasting into a terminal
   // or a bug report. Selecting part of one works too, straight on the text;
   // this is the one click that takes all of it.
@@ -1149,7 +1162,14 @@ Panel {
                   anchors.rightMargin: Style.spacing.md
                   anchors.verticalCenter: parent.verticalCenter
                   visible: agentRow.isGroup
+                  // Every Text here that shows data renders as plain text:
+                  // AutoText would read a path or a name that happens to contain
+                  // an `<img>` tag as markup and load its source on the shell's
+                  // own thread, the freeze the paste bounds exist to prevent.
+                  // The answer is the one exception; it renders markdown, minus
+                  // its images (see renderText).
                   text: agentRow.rowLabel
+                  textFormat: Text.PlainText
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1181,6 +1201,7 @@ Panel {
                   Text {
                     width: parent.width
                     text: agentRow.agentId
+                    textFormat: Text.PlainText
                     color: agentRow.isSelected ? root.foreground : Qt.darker(root.foreground, 1.15)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -1194,6 +1215,7 @@ Panel {
                   Text {
                     width: parent.width
                     text: agentRow.rowState.label
+                    textFormat: Text.PlainText
                     color: agentRow.rowState.tone === "working"
                       ? root.accent
                       : (agentRow.rowState.tone === "failed" ? root.urgentColor : root.dim)
@@ -1223,6 +1245,7 @@ Panel {
                     anchors.centerIn: parent
                     visible: !agentRow.busy && agentRow.unseen > 0
                     text: String(agentRow.unseen)
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1275,6 +1298,7 @@ Panel {
               Text {
                 Layout.fillWidth: true
                 text: root.selectedId === "" ? "No agent" : root.selectedId
+                textFormat: Text.PlainText
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -1289,6 +1313,7 @@ Panel {
                   : (root.dropped > 0
                       ? root.dropped + " earlier message" + (root.dropped === 1 ? "" : "s") + " not shown"
                       : "idle")
+                textFormat: Text.PlainText
                 color: root.running ? root.accent : root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1414,6 +1439,7 @@ Panel {
                     : "the directory of the window you are on"
                   return root.workdirPinned ? where : where + "  ·  click to pin a path"
                 }
+                textFormat: Text.PlainText
                 color: root.effectiveWorkdir === "" ? root.dim : root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1615,6 +1641,7 @@ Panel {
                     // the field, and repeating it in every row is the part of a
                     // file dialog that makes it unreadable.
                     text: suggestRow.modelData.slice(suggestRow.modelData.lastIndexOf("/") + 1)
+                    textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1669,6 +1696,7 @@ Panel {
               height: Style.space(26)
               verticalAlignment: Text.AlignVCenter
               text: root.workspaceNote
+              textFormat: Text.PlainText
               color: root.workspaceProblem === "" ? root.dim : root.accent
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -1729,6 +1757,7 @@ Panel {
                       anchors.margins: Style.spacing.sm
                       visible: block.modelData.workdir !== undefined && block.modelData.workdir !== ""
                       text: "in " + block.modelData.workdir
+                      textFormat: Text.PlainText
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
@@ -1746,7 +1775,11 @@ Panel {
                     Text {
                       id: promptMeasure
                       visible: false
+                      // A measure is sized against the raw string, so it must
+                      // never parse markup: AutoText would read a pasted
+                      // `<img>` tag as HTML and load its source on this thread.
                       text: root.blockText(block.modelData)
+                      textFormat: Text.PlainText
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
                     }
@@ -1797,7 +1830,11 @@ Panel {
                     Text {
                       id: answerMeasure
                       visible: false
-                      text: root.blockText(block.modelData)
+                      // Same reason as the prompt's measure: sizing the bubble
+                      // must not start an image load. renderText drops the
+                      // images the answer itself renders without.
+                      text: root.renderText(block.modelData)
+                      textFormat: Text.PlainText
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
                     }
@@ -1822,7 +1859,7 @@ Panel {
                       rightPadding: 0
                       topPadding: 0
                       bottomPadding: 0
-                      text: root.blockText(block.modelData)
+                      text: root.renderText(block.modelData)
                       textFormat: TextEdit.MarkdownText
                       color: root.foreground
                       font.family: root.fontFamily
@@ -1887,6 +1924,7 @@ Panel {
                     text: (block.modelData.code === 143 || block.modelData.code === 130)
                       ? "· stopped"
                       : "· the run ended with code " + block.modelData.code
+                    textFormat: Text.PlainText
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -1929,6 +1967,7 @@ Panel {
                   ? "No opencode agents found. Install opencode, then reopen this panel."
                   : "Say what you want, or paste the error you just hit, and "
                     + root.selectedId + " starts on it."
+                textFormat: Text.PlainText
                 color: root.dim
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
@@ -2028,6 +2067,7 @@ Panel {
             Layout.fillWidth: true
             visible: root.notice !== ""
             text: root.notice
+            textFormat: Text.PlainText
             color: root.urgentColor
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
