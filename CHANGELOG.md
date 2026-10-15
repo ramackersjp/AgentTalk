@@ -7,6 +7,20 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.2.2]
+
+### Fixed
+
+- Text shown in the panel can no longer load an image into the shell. Qt reads
+  an image the moment a string names one, synchronously on the shell's own
+  thread, so a value that pointed at a FIFO could freeze the whole shell for as
+  long as the pipe was held open. The two hidden labels that size the prompt and
+  answer bubbles did this through their default AutoText, even though the prompt
+  itself renders as plain text, and so did path- and name-bearing labels like the
+  agent list, the workspace row and the notice. Every such label now renders as
+  plain text. An answer still renders as markdown, but without its images: the
+  alt text is kept in their place, so nothing in a transcript can start a load.
+
 ## [2.2.1]
 
 ### Fixed
