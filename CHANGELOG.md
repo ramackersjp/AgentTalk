@@ -7,6 +7,18 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.2.3]
+
+### Fixed
+
+- An agent's answer no longer renders as markdown, only as plain text. Qt's
+  markdown renderer parses inline HTML too, so an `<img>` in an answer made Qt
+  read that source synchronously on the shell's own thread: a path that never
+  ends, a FIFO, froze the whole shell for as long as it was held open. Removing
+  the images out of the markdown still left its HTML tags, so the answer no
+  longer goes through the markdown renderer at all, and every text surface in
+  the panel is plain text.
+
 ## [2.2.2]
 
 ### Fixed
