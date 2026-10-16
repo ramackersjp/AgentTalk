@@ -541,19 +541,6 @@ Panel {
     return String(block.text)
   }
 
-  // Qt's text engine loads an image the moment markdown names one, on the
-  // shell's own thread, so a path that never ends — a FIFO — freezes the whole
-  // shell for as long as it is held open, and a transcript is exactly where an
-  // unread pasted line lands. A rendered answer therefore keeps its markdown
-  // but loses its images, the alt text left in their place, so nothing in the
-  // transcript can start a load. Prompts render as plain text and are untouched.
-  function renderText(block) {
-    return root.blockText(block)
-      .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
-      .replace(/!\[([^\]]*)\]/g, "$1")
-  }
-
   // The whole answer onto the clipboard at once, for pasting into a terminal
   // or a bug report. Selecting part of one works too, straight on the text;
   // this is the one click that takes all of it.
@@ -1162,12 +1149,11 @@ Panel {
                   anchors.rightMargin: Style.spacing.md
                   anchors.verticalCenter: parent.verticalCenter
                   visible: agentRow.isGroup
-                  // Every Text here that shows data renders as plain text:
-                  // AutoText would read a path or a name that happens to contain
-                  // an `<img>` tag as markup and load its source on the shell's
-                  // own thread, the freeze the paste bounds exist to prevent.
-                  // The answer is the one exception; it renders markdown, minus
-                  // its images (see renderText).
+                  // Every Text that shows data renders as plain text: AutoText
+                  // would read a path or a name that happens to contain an
+                  // `<img>` tag as markup and load its source on the shell's own
+                  // thread, the freeze the paste bounds exist to prevent. The
+                  // answer is no exception; see the plain-text note there.
                   text: agentRow.rowLabel
                   textFormat: Text.PlainText
                   color: root.dim
@@ -1831,20 +1817,21 @@ Panel {
                       id: answerMeasure
                       visible: false
                       // Same reason as the prompt's measure: sizing the bubble
-                      // must not start an image load. renderText drops the
-                      // images the answer itself renders without.
-                      text: root.renderText(block.modelData)
+                      // must never parse markup.
+                      text: root.blockText(block.modelData)
                       textFormat: Text.PlainText
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
                     }
 
-                    // Answers render as markdown, because that is what agents
-                    // write: bold, lists, code and headers come out formatted
-                    // instead of showing their markers. Prompts stay plain
-                    // text on purpose — a pasted error must read exactly as
-                    // typed, not reinterpreted. Copying still takes the raw
-                    // markdown, so the formatting survives the paste.
+                    // The answer is plain text, like the prompt. Rendering it
+                    // as markdown was unsafe: Qt's markdown renderer parses
+                    // inline HTML too, so an <img> in an answer made Qt read
+                    // that source synchronously on the shell's own thread — a
+                    // FIFO there froze the whole shell for as long as it was
+                    // held open. Stripping the images out of the markdown left
+                    // its HTML tags, so no markdown is rendered at all. Copying
+                    // still takes the raw text.
                     TextArea {
                       id: answer
                       anchors.left: parent.left
@@ -1859,8 +1846,8 @@ Panel {
                       rightPadding: 0
                       topPadding: 0
                       bottomPadding: 0
-                      text: root.renderText(block.modelData)
-                      textFormat: TextEdit.MarkdownText
+                      text: root.blockText(block.modelData)
+                      textFormat: TextEdit.PlainText
                       color: root.foreground
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.body
