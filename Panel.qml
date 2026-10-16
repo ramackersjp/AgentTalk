@@ -1356,12 +1356,12 @@ Panel {
                 font.letterSpacing: 0.6
               }
 
-              SearchableDropdown {
+              ModelPicker {
                 id: modelPicker
                 Layout.fillWidth: true
-                showLabel: false
                 enabled: root.selectedId !== ""
                 opacity: enabled ? 1 : root.disabledDim
+                panel: root
                 options: root.modelOptions
                 triggerLabel: root.modelOptions.length === 0 ? "loading models…" : "opencode default"
                 placeholderText: "Search models…"
@@ -1473,6 +1473,14 @@ Panel {
                   placeholderTextColor: Qt.darker(root.foreground, 1.7)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
+
+                  // Qt's TextArea attaches a right-click menu whose Paste calls
+                  // the editor's own paste(): a synchronous, unbounded read of
+                  // the whole foreign clipboard, on the shell's own thread. A
+                  // 64 MiB clipboard then lays out a 64 MiB document and the
+                  // shell dies. Drop the menu; paste goes through the bounded
+                  // helper, and the keyboard/middle-click guards still apply.
+                  ContextMenu.menu: null
 
                   // A TextArea has no `textEdited` signal. Every write to the
                   // field also changes `text`, but the ones that already hold
@@ -2000,6 +2008,14 @@ Panel {
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.body
 
+                // Qt's TextArea attaches a right-click menu whose Paste calls
+                // the editor's own paste(): a synchronous, unbounded read of
+                // the whole foreign clipboard, on the shell's own thread. A
+                // 64 MiB clipboard then lays out a 64 MiB document and the
+                // shell dies. Drop the menu; paste goes through the bounded
+                // helper, and the keyboard/middle-click guards still apply.
+                ContextMenu.menu: null
+
                 Keys.onPressed: function(event) {
                   // Paste is read through the script, bounded, never handed to
                   // Qt's own synchronous clipboard read. It is checked before
@@ -2061,6 +2077,291 @@ Panel {
             wrapMode: Text.Wrap
             maximumLineCount: 2
             elide: Text.ElideRight
+          }
+        }
+      }
+    }
+  }
+
+  // The model picker. Omarchy's own SearchableDropdown would be the obvious
+  // choice, but its search box is a TextInput, and a TextInput reads the whole
+  // foreign clipboard synchronously on every clipboard change to keep
+  // `canPaste` honest (QTBUG-149610): a clipboard owner that streams slowly,
+  // never ends, or is simply enormous can stall or exhaust the shared shell,
+  // with no deadline on the wait and no ceiling on the size. This is that
+  // picker with the one dangerous part replaced. The search box is a TextArea,
+  // which only looks at the offered formats; an explicit paste goes through
+  // `agenttalk paste` like every other field here, and middle click is taken
+  // before Qt sees it. No field in this panel reads the clipboard itself.
+  component ModelPicker: BorderSurface {
+    id: picker
+
+    // The panel, so the search box can reach the bounded paste helpers. Set
+    // once at the call site; the field is the only thing that reaches back.
+    property var panel: null
+    property var options: []
+    property string value: ""
+    property string triggerLabel: ""
+    property string placeholderText: "Search…"
+    property string emptyText: "No matches"
+    property color foreground: Color.foreground
+    property color accent: Color.accent
+    property string fontFamily: Style.font.family
+
+    signal changed(string value)
+
+    readonly property bool popupOpen: popup.opened
+
+    function optionValue(o) { return (o && typeof o === "object") ? String(o.value) : String(o) }
+    function optionLabel(o) { return (o && typeof o === "object") ? String(o.label) : String(o) }
+    function currentLabel() {
+      for (var i = 0; i < options.length; i++)
+        if (optionValue(options[i]) === value) return optionLabel(options[i])
+      return value
+    }
+
+    property var filtered: options
+    function recomputeFiltered() {
+      var query = String(searchArea.text).toLowerCase()
+      if (query === "") { filtered = options; return }
+      var out = []
+      for (var i = 0; i < options.length; i++)
+        if (optionLabel(options[i]).toLowerCase().indexOf(query) !== -1) out.push(options[i])
+      filtered = out
+    }
+    onOptionsChanged: recomputeFiltered()
+
+    implicitHeight: Style.spacing.controlHeight
+    radius: Style.cornerRadius
+    activeFocusOnTab: true
+
+    readonly property bool _focused: activeFocus || popupOpen
+    readonly property bool _hot: triggerHover.hovered
+    color: Style.controlFill(_focused, _hot, foreground, accent)
+    borderSpec: Border.controlSpec(_focused ? "focus" : (_hot ? "hover-cursor" : "normal"), foreground, accent)
+
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
+          || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
+        popup.opened ? popup.close() : popup.open()
+        event.accepted = true
+      } else if (event.key === Qt.Key_Escape && popup.opened) {
+        popup.close(); event.accepted = true
+      }
+    }
+
+    Text {
+      textFormat: Text.PlainText
+      anchors.left: parent.left
+      anchors.right: chevron.left
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.leftMargin: picker.borderLeft + Style.spacing.controlPaddingX
+      anchors.rightMargin: picker.borderRight + Style.spacing.md
+      text: picker.currentLabel() || picker.triggerLabel || picker.placeholderText
+      color: (picker.currentLabel() || picker.triggerLabel) ? picker.foreground : Qt.darker(picker.foreground, 1.5)
+      font.family: picker.fontFamily
+      font.pixelSize: Style.font.body
+      elide: Text.ElideRight
+    }
+
+    Text {
+      id: chevron
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      anchors.rightMargin: picker.borderRight + Style.spacing.controlGap
+      text: "󰅀"
+      color: Qt.darker(picker.foreground, 1.2)
+      font.family: picker.fontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    HoverHandler { id: triggerHover }
+
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: {
+        picker.forceActiveFocus()
+        popup.opened ? popup.close() : popup.open()
+      }
+    }
+
+    Popup {
+      id: popup
+      x: 0
+      y: picker.height + Style.spacing.xxs
+      width: picker.width
+      implicitHeight: Math.max(Style.spacing.searchablePopupMinHeight,
+                               Math.min(resultList.contentHeight + Style.space(50),
+                                        Style.spacing.popupRowHeight * 6 + 5 * Style.spacing.labelGap + Style.space(50)))
+      padding: Style.spacing.hairline
+      focus: true
+
+      background: Rectangle {
+        color: Color.popups.background
+        radius: Style.cornerRadius
+        border.color: Color.popups.border
+        border.width: Style.normalBorderWidth
+      }
+
+      onOpened: {
+        searchArea.text = ""
+        picker.recomputeFiltered()
+        Qt.callLater(function() { searchArea.forceActiveFocus() })
+      }
+      onClosed: searchArea.text = ""
+
+      contentItem: Column {
+        spacing: 0
+
+        Item {
+          id: searchHeader
+          width: parent.width
+          height: Style.spacing.popupRowHeight + Style.spacing.controlPaddingX
+
+          // A TextArea, not a TextField, for the reason in this component's
+          // header: the search is a place foreign text arrives, and only the
+          // TextArea leaves the clipboard to the bounded paste helper.
+          TextArea {
+            id: searchArea
+            anchors.fill: parent
+            anchors.margins: Style.spacing.md
+            wrapMode: TextEdit.NoWrap
+            selectByMouse: true
+            background: null
+            color: picker.foreground
+            selectionColor: Style.selectionFillFor(picker.foreground, picker.accent)
+            selectedTextColor: picker.foreground
+            placeholderText: picker.placeholderText
+            placeholderTextColor: Qt.darker(picker.foreground, 1.7)
+            font.family: picker.fontFamily
+            font.pixelSize: Style.font.body
+
+            // Qt's TextArea attaches a right-click menu whose Paste calls the
+            // editor's own paste(): a synchronous, unbounded read of the whole
+            // foreign clipboard, on the shell's own thread. Drop the menu;
+            // paste goes through the bounded helper.
+            ContextMenu.menu: null
+
+            onTextChanged: {
+              picker.recomputeFiltered()
+              if (resultList.count > 0) resultList.currentIndex = 0
+            }
+
+            Keys.onPressed: function(event) {
+              if (picker.panel && picker.panel.isPasteKey(event)) {
+                picker.panel.requestPaste(searchArea)
+                event.accepted = true
+              } else if (event.key === Qt.Key_Escape) {
+                popup.close(); event.accepted = true
+              } else if (event.key === Qt.Key_Down) {
+                if (resultList.count > 0) { resultList.currentIndex = 0; resultList.forceActiveFocus() }
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                if (resultList.count > 0) resultList.selectCurrent()
+                event.accepted = true
+              }
+            }
+
+            // Middle click is Qt's other paste gesture. This guard takes that
+            // one button so Qt never reads the PRIMARY selection itself.
+            MouseArea {
+              anchors.fill: parent
+              acceptedButtons: Qt.MiddleButton
+              onClicked: if (picker.panel) picker.panel.requestPaste(searchArea, true)
+            }
+          }
+        }
+
+        Rectangle {
+          width: parent.width
+          height: Style.space(1)
+          color: Util.alpha(picker.foreground, 0.10)
+        }
+
+        Item {
+          width: parent.width
+          height: popup.height - searchHeader.height - Style.spacing.xxs - Style.space(1)
+
+          Text {
+            textFormat: Text.PlainText
+            anchors.centerIn: parent
+            visible: resultList.count === 0
+            text: picker.emptyText
+            color: Qt.darker(picker.foreground, 1.6)
+            font.family: picker.fontFamily
+            font.pixelSize: Style.font.body
+          }
+
+          ListView {
+            id: resultList
+            anchors.fill: parent
+            spacing: Style.spacing.labelGap
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            model: picker.filtered
+            currentIndex: -1
+            keyNavigationEnabled: false
+
+            function selectCurrent() {
+              if (currentIndex < 0 || currentIndex >= picker.filtered.length) return
+              var picked = picker.optionValue(picker.filtered[currentIndex])
+              picker.value = picked
+              picker.changed(picked)
+              popup.close()
+            }
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                popup.close(); event.accepted = true
+              } else if (event.key === Qt.Key_Down) {
+                if (resultList.currentIndex >= resultList.count - 1) { event.accepted = true; return }
+                resultList.currentIndex = resultList.currentIndex + 1
+                event.accepted = true
+              } else if (event.key === Qt.Key_Up) {
+                if (resultList.currentIndex <= 0) { searchArea.forceActiveFocus(); event.accepted = true; return }
+                resultList.currentIndex = resultList.currentIndex - 1
+                event.accepted = true
+              } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                resultList.selectCurrent(); event.accepted = true
+              }
+            }
+
+            delegate: Rectangle {
+              required property var modelData
+              required property int index
+              width: resultList.width
+              height: Math.max(Style.spacing.popupRowHeight, rowLabel.implicitHeight + Style.spacing.rowPaddingX)
+              color: index === resultList.currentIndex
+                ? Style.hoverFillFor(picker.foreground, picker.accent)
+                : "transparent"
+
+              Text {
+                id: rowLabel
+                textFormat: Text.PlainText
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.spacing.controlPaddingX
+                anchors.rightMargin: Style.spacing.controlPaddingX
+                text: picker.optionLabel(modelData)
+                color: index === resultList.currentIndex
+                  ? Style.hoverStateColor(picker.foreground, picker.accent)
+                  : picker.foreground
+                font.family: picker.fontFamily
+                font.pixelSize: Style.font.body
+                elide: Text.ElideRight
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onPositionChanged: resultList.currentIndex = parent.index
+                onClicked: resultList.selectCurrent()
+              }
+            }
           }
         }
       }
