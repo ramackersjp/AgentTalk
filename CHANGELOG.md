@@ -7,6 +7,28 @@ the only place a version number lives.
 
 ## [Unreleased]
 
+## [2.2.4]
+
+### Fixed
+
+- The model picker no longer reads the foreign clipboard to decide whether it
+  could paste. Omarchy's `SearchableDropdown` is a `TextInput` under the hood,
+  and a `TextInput` reads the whole clipboard synchronously on every clipboard
+  change: `canPaste()` asks `mimeData->text()` and so does the dataChanged slot,
+  whether or not anything is pasted. A provider that streams slowly, never ends
+  or is simply enormous then stalled the shell's own GUI thread. The picker is
+  now the plugin's own, and its search box is a `TextArea`, which looks at the
+  offered formats instead. An explicit paste still goes through the bounded
+  `agenttalk paste`, like every other field.
+
+- The panel's editable fields no longer carry Qt's built-in right-click menu.
+  Its Paste called the field's own `paste()`, a synchronous, unbounded read of
+  the whole foreign clipboard on the shell's thread, so a large clipboard laid
+  out a document of that size and hung the shell. Paste now only ever reaches
+  the bounded `agenttalk paste`, whatever the clipboard holds. The keyboard and
+  middle-click guards that already did this are joined by the removal of the
+  menu, the last way Qt could paste on its own.
+
 ## [2.2.3]
 
 ### Fixed

@@ -745,6 +745,41 @@ check "paste --primary drops a selection cut off at the deadline" \
   "$(STUB_PRIMARY=slow STUB_SLEEP=5 AGENTTALK_PASTE_TIMEOUT=1 PATH="$PASTE_PATH" "$AGENTTALK" paste --primary 2>&1 >/dev/null)" \
   "agenttalk: the clipboard did not answer within 1s"
 
+# --- clipboard safety --------------------------------------------------------
+#
+# A native TextInput -- and the TextField built on it, and Omarchy's
+# SearchableDropdown, which is one under the hood -- reads the whole foreign
+# clipboard synchronously on every clipboard change to keep `canPaste` honest:
+# `canPaste()` asks `mimeData->text()` and so does the dataChanged slot, whether
+# or not anything is pasted. A provider that streams slowly, never ends, or is
+# simply enormous then stalls the shell's own GUI thread, because the panel runs
+# in that process and not in one of its own. TextArea does not do this (it looks
+# at the offered formats), which is why every field in this plugin is one.
+#
+# This is a source guard because the failure only shows itself at runtime, on a
+# machine whose clipboard is hostile, which is not a thing a test can stage here.
+# Comments are stripped first so the names are still allowed where they explain
+# why they are avoided.
+strip_comments() { sed 's://.*::' "$1"; }
+clipboard_readers=0
+for qml in "$ROOT"/*.qml; do
+  clipboard_readers=$((clipboard_readers + $(strip_comments "$qml" | grep -cE '\b(TextInput|TextField|SearchableDropdown)\b')))
+done
+check "no field in the plugin reads the foreign clipboard itself" \
+  "$clipboard_readers" "0"
+check "the model picker still edits its search with a TextArea" \
+  "$(sed -n '/component ModelPicker: BorderSurface/,/^  }$/p' "$ROOT/Panel.qml" | grep -c 'TextArea {')" "1"
+
+# Qt's TextArea attaches a right-click menu whose Paste calls the field's own
+# paste(): a synchronous, unbounded read of the whole foreign clipboard on the
+# shell's thread, so a large clipboard lays out a document of that size and
+# hangs the shell. The key and middle-click guards do not cover a menu, so every
+# editable field must drop it. `readOnly` fields cannot paste (Qt's `canPaste`
+# is false), so they keep theirs; the count is a tripwire for a new editable
+# field that arrives without the line.
+check "every editable text field drops Qt's unbounded right-click Paste" \
+  "$(strip_comments "$ROOT/Panel.qml" | grep -c 'ContextMenu.menu: null')" "3"
+
 # --- clear ------------------------------------------------------------------
 
 AGENTTALK_OPENCODE_BIN="$STUB" "$AGENTTALK" clear build >/dev/null 2>&1
